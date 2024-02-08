@@ -1,0 +1,270 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+## =================== DESCRIPTION =================== ##
+Description: >-
+  AWS CF S3 Static Website
+  - S3 bucket 1 for root domain (example.com) and configure it to host a static website
+  - S3 bucket 2 for subdomain (www.example.com) and set it up to redirect requests to root domain
+  - Cloudfront for https
+  - Route 53 for 
+
+## ===================== METADATA ===================== ##
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: DNS parameters for S3 buckets
+        Parameters:
+          - paramRootDomain
+          - paramSubdomain
+      - Label:
+          default: AWS tag parameters
+        Parameters:
+          - paramTagName
+
+## ==================== PARAMETERS ==================== ##
+Parameters:
+  paramRootDomain:
+    Description: Specify a root domain for your website (such as example.com)
+    Type: String
+  paramSubdomain:
+    Description: OPTIONAL. Specify a subdomain.
+    Type: String
+    Default: www
+  paramTagName:
+    Description: Specify a unique name for tag
+    Type: String
+    AllowedPattern: "[\\x20-\\x7E]*" #https://docs.oracle.com/javase/6/docs/api/java/util/regex/Pattern.html
+    ConstraintDescription: Must contain only ASCII characters
+
+## ==================== MAPPINGS ==================== ##
+Mappings:
+  RegionMap: #https://docs.aws.amazon.com/general/latest/gr/s3.html#s3_website_region_endpoints
+    eu-west-3:
+      S3HostedZoneId: Z3R1K369G5AVDG
+
+## ==================== CONDITIONS ==================== ##
+# Conditions:
+
+## =================== RESOURCES =================== ##
+Resources:
+  # create S3 bucket for subdomain (such as www.example.com) and configure it to host a static website
+  myS3BucketSub:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub "${paramSubdomain}.${paramRootDomain}"
+      AccessControl: BucketOwnerFullControl
+      WebsiteConfiguration: # make this bucket a website endpoint， in contrast with the bucket below
+        RedirectAllRequestsTo: 
+          HostName: !Ref myS3BucketRoot
+          Protocol: https
+      Tags:
+        - Key: yuanchao-handson-tag
+          Value: !Ref paramTagName
+
+
+  myS3BucketRoot:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Ref paramRootDomain
+      AccessControl: BucketOwnerFullControl
+      VersioningConfiguration: 
+        Status: Enabled
+      Tags:
+        - Key: yuanchao-handson-tag
+          Value: !Ref paramTagName
+
+  myRoute53HostedZone:
+    Type: 'AWS::Route53::HostedZone'
+    Properties:
+      HostedZoneConfig: 
+        Comment: !Sub hosted zone for ${paramRootDomain}
+      Name: !Ref paramRootDomain 
+      HostedZoneTags: 
+        - Key: yuanchao-handson-tag
+          Value: !Ref paramTagName
+
+  mySSLCertificate:
+    Type: 'AWS::CertificateManager::Certificate'
+    Properties:
+      DomainName: !Ref paramRootDomain
+      SubjectAlternativeNames:
+        - !Sub '*.${paramRootDomain}'
+      DomainValidationOptions:
+        - DomainName: !Ref paramRootDomain
+          HostedZoneId: !GetAtt myRoute53HostedZone.Id 
+      ValidationMethod: DNS
+      Tags:
+        - Key: yuanchao-handson-tag
+          Value: !Ref paramTagName
+
+  myCloudFrontOAI:
+    Type: 'AWS::CloudFront::CloudFrontOriginAccessIdentity'
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: 'OAI for S3 origins'
+
+  myCFDRootDomain:
+    Type: 'AWS::CloudFront::Distribution'
+    Properties:
+      DistributionConfig:
+        Comment: CloudFront distribution points to S3 bucket for rootdomain
+        Origins: # info about origins for this distribution
+          - DomainName: !GetAtt myS3BucketRoot.RegionalDomainName
+            Id: !Sub 'S3Origin-${paramRootDomain}' # unique identifier
+            S3OriginConfig: # use S3OriginConfig when it's not website endpoint
+              OriginAccessIdentity: !Sub 'origin-access-identity/cloudfront/${myCloudFrontOAI}'
+        Aliases: 
+          - !Sub '${paramRootDomain}'
+        CustomErrorResponses:
+          - ErrorCode: 403 
+            ResponseCode: 404
+            ResponsePagePath: '/error.html'
+            ErrorCachingMinTTL: 60
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          Compress: true
+          DefaultTTL: 3600 # in seconds, 1 hour
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          MaxTTL: 86400 
+          MinTTL: 60
+          TargetOriginId: !Sub 'S3Origin-${paramRootDomain}'
+          ViewerProtocolPolicy: 'redirect-to-https' # 'allow-all'
+        DefaultRootObject: 'index.html' 
+        Enabled: true 
+        HttpVersion: http2 # the maximum HTTP version(s) that you want viewers to use to communicate with CloudFront
+        PriceClass: PriceClass_100 #https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/PriceClass.html
+        ViewerCertificate:
+          AcmCertificateArn: !Ref mySSLCertificate
+          SslSupportMethod: sni-only
+      Tags:
+        - Key: yuanchao-handson-tag
+          Value: !Ref paramTagName
+
+  # create a policy for S3 bucket for subdomain (that contains static website, such as www.example.com) to let CloudFront OAI access S3 bucket content
+  myPolicyS3Bucket:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref myS3BucketRoot
+      PolicyDocument:
+        Statement:
+        - Action: 's3:GetObject'
+          Effect: Allow
+          Resource: !Sub "${myS3BucketRoot.Arn}/*"
+          Principal:
+            CanonicalUser: !GetAtt myCloudFrontOAI.S3CanonicalUserId
+        # deny access for non SSL access to S3 bucket
+        - Sid: AllowSSLRequestsOnly 
+          Effect: Deny
+          Principal: '*'
+          Action: 's3:*'
+          Resource:
+          - !Sub "${myS3BucketRoot.Arn}"
+          - !Sub "${myS3BucketRoot.Arn}/*"
+          Condition:
+            Bool:
+              'aws:SecureTransport': false 
+
+  myCFDSubdomain:
+    Type: 'AWS::CloudFront::Distribution'
+    Properties:
+      DistributionConfig:
+        Comment: CloudFront distribution points to S3 bucket for root domain
+        Origins:
+          - DomainName: !GetAtt myS3BucketSub.WebsiteURL # as bucket is a website endpoint, use webstie url
+            Id: !Sub 'RedirectS3Origin-${paramSubdomain}.${paramRootDomain}'
+            CustomOriginConfig: #DomainName need to be configured as CustomOriginConfig, when website endpoint
+              HTTPPort: 80 # required
+              HTTPSPort: 443 # required
+              OriginProtocolPolicy: 'http-only' 
+        Aliases: 
+          - !Sub '${paramSubdomain}.${paramRootDomain}'
+        CustomErrorResponses:
+          - ErrorCode: 403 
+            ResponseCode: 404
+            ResponsePagePath: '/error.html'
+            ErrorCachingMinTTL: 60
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          Compress: true
+          DefaultTTL: 3600 # in seconds, 1 hour
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          MaxTTL: 86400 # in seconds, 24 hours
+          MinTTL: 60 # in seconds, 1 min
+          TargetOriginId: !Sub 'RedirectS3Origin-${paramSubdomain}.${paramRootDomain}'
+          ViewerProtocolPolicy: 'redirect-to-https' # 'allow-all'
+        DefaultRootObject: 'index.html' 
+        Enabled: true # enable distribution
+        HttpVersion: http2 
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          AcmCertificateArn: !Ref mySSLCertificate
+          SslSupportMethod: sni-only
+      Tags:
+        - Key: yuanchao-handson-tag
+          Value: !Ref paramTagName
+
+  myRoute53RecordSetGroup:
+    Type: 'AWS::Route53::RecordSetGroup'
+    Properties:
+      Comment: Route53 record for CloudFront distributions for root domain and subdomain
+      # HostedZoneName: !Sub '${paramRootDomain}.'  # keep the dot
+      HostedZoneId: !GetAtt myRoute53HostedZone.Id 
+      RecordSets:
+        - Name: !Sub '${paramSubdomain}.${paramRootDomain}.'
+          Type: A # 'A' routes traffic to an IPv4 address and some AWS resources.
+          AliasTarget:
+              DNSName: !GetAtt myCFDSubdomain.DomainName  
+              HostedZoneId: Z2FDTNDATAQYW2 # magical alphanumeric ID provided by AWS
+        - Name: !Sub '${paramRootDomain}.'
+          Type: A 
+          AliasTarget:
+              DNSName: !GetAtt myCFDRootDomain.DomainName  
+              HostedZoneId: Z2FDTNDATAQYW2
+
+## ======================= OUTPUT ====================== ##
+Outputs:
+  outputS3WebsiteURLRoot:
+    Description: Amazon S3 website endpoint for root domain
+    Value: !GetAtt myS3BucketRoot.WebsiteURL
+  outputS3RegionalDomainNameRoot:
+    Description:  Regional domain name of S3 bucket for root domain
+    Value: !GetAtt myS3BucketRoot.RegionalDomainName 
+  outputS3WebsiteURLSub:
+    Description: Amazon S3 website endpoint for subdomain
+    Value: !GetAtt myS3BucketSub.WebsiteURL
+  outputS3RegionalDomainNameSub:
+    Description:  Regional domain name of S3 bucket for subdomain
+    Value: !GetAtt myS3BucketSub.RegionalDomainName 
+
+  outputCertificateArn:
+    Description: Issued SSL certificate Arn
+    Value: !Ref mySSLCertificate 
+    
+  outputRoute53HostedZoneId:
+    Description: Public hosted zone ID 
+    Value: !GetAtt myRoute53HostedZone.Id # the same as !Ref myRoute53HostedZone  
+  outputRoute53HostedZoneNameServers:
+    Description: List of name servers for newly created public hosted zone
+    Value: !Join [', ', !GetAtt myRoute53HostedZone.NameServers] 
+

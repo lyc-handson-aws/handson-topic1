@@ -1,4 +1,4 @@
-# Topic 2 - Https Static Website on AWS S3 with a public DNS (www/naked)domain
+# Topic 1 - Https Static Website on AWS S3 with a public DNS domain
 
 ###### Yuanchao Hands-on Project
 

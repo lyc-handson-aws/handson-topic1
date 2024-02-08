@@ -68,22 +68,6 @@ Resources:
       AccessControl: BucketOwnerFullControl
       VersioningConfiguration: 
         Status: Enabled
-      WebsiteConfiguration:
-        IndexDocument: index.html
-        ErrorDocument: error.html
-        RoutingRules:
-          - RoutingRuleCondition:
-              KeyPrefixEquals: topic1
-            RedirectRule:
-              ReplaceKeyWith: index.html
-          - RoutingRuleCondition:
-              KeyPrefixEquals: topic2
-            RedirectRule:
-              ReplaceKeyWith: topic2/index.html
-          - RoutingRuleCondition:
-              KeyPrefixEquals: topic3
-            RedirectRule:
-              ReplaceKeyWith: topic3/index.html
       Tags:
         - Key: yuanchao-handson-tag
           Value: !Ref paramTagName
@@ -195,7 +179,7 @@ Resources:
       DistributionConfig:
         Comment: CloudFront distribution points to S3 bucket for root domain
         Origins:
-          - DomainName: !Sub '${paramSubdomain}.${paramRootDomain}.s3-website-${AWS::Region}.amazonaws.com' # as bucket is a website endpoint, use webstie url without http://
+          - DomainName: !Sub '${myS3BucketSub}.s3-website-${AWS::Region}.amazonaws.com' # as bucket is a website endpoint, use webstie url without http://
             Id: !Sub 'RedirectS3Origin-${paramSubdomain}.${paramRootDomain}'
             CustomOriginConfig: #DomainName need to be configured as CustomOriginConfig, when website endpoint
               HTTPPort: 80 # required

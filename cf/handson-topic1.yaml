@@ -181,7 +181,7 @@ Resources:
       DistributionConfig:
         Comment: CloudFront distribution points to S3 bucket for root domain
         Origins:
-          - DomainName: !GetAtt myS3BucketSub.WebsiteURL # as bucket is a website endpoint, use webstie url
+          - DomainName: !Sub '${paramSubdomain}.${paramRootDomain}.s3-website-${AWS::Region}.amazonaws.com' # as bucket is a website endpoint, use webstie url without http://
             Id: !Sub 'RedirectS3Origin-${paramSubdomain}.${paramRootDomain}'
             CustomOriginConfig: #DomainName need to be configured as CustomOriginConfig, when website endpoint
               HTTPPort: 80 # required
